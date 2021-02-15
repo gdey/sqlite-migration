@@ -1,0 +1,3 @@
+# This is a file listing all the sql files and the sequence it needs
+# to be applied in.
+add_user.sql

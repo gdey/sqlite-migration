@@ -1,0 +1,6 @@
+# This file described the order in which the tables for the database should be extracted.
+
+* ! updated_at , created_at  # for all tables we don't want update_at or created_at
+aTable
+gen_migrations ! duration # don't want the duration field for the migrations table.
+gen_stage_data ! duration

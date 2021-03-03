@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -22,13 +23,11 @@ const (
 	InitialVersion = ""
 )
 
-type osfs struct{}
+type osFS struct{}
 
-func (osfs) Open(name string) (io.ReadCloser, error) { return os.Open(name) }
+func (osFS) Open(name string) (fs.File, error) { return os.Open(name) }
 
-type FSOpener interface {
-	Open(name string) (io.ReadCloser, error)
-}
+type FSOpener = fs.FS
 
 type Logger interface {
 	Printf(format string, v ...interface{})
@@ -48,7 +47,7 @@ type Manager struct {
 
 func (mng *Manager) FS() FSOpener {
 	if mng == nil || mng.fs == nil {
-		mng.fs = osfs{}
+		mng.fs = osFS{}
 	}
 	return mng.fs
 }

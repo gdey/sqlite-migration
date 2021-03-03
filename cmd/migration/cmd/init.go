@@ -18,9 +18,9 @@ var (
 			Short: "initialize the given database using the migration files.",
 			Long: fmt.Sprintf(`initialize the given database using the migration files
 
-The database will be destroyed and recreated. If the database already exists
-and the "-f" flag has not be been set. The application will exist without
-doing anything and an exist code of %d.
+If the given database already exists, and the "-f" flag has been provied;
+the application will destroy and recreate it. Otherwise it will only initialized
+a non-existant database; otherwise doing anything and an exiting with a code of %d.
 `, ExitCodeDatabaseAlreadyExists),
 			Run: runInitCmd,
 		}

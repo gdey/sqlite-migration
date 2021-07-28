@@ -16,45 +16,31 @@ import (
 	"text/template"
 )
 
-// DB represents the Database that we want to dump
-type DB struct {
-	// The name of the schema from the data base we care to dump
-	Schema string
-	*sql.DB
+const (
+	DefaultSchema = "main"
+)
+
+var insertTemplate = template.Must(template.New("insertTemplate").Parse(`
+INSERT INTO {{.TableName}}
+  {{.Columns}}
+VALUES
+{{range .Values -}}
+  {{.}}
+{{end -}}
+;
+`))
+
+type Byer struct {
+	LessFn func(i, j int) bool
+	LenFn  func() int
+	SwapFn func(i, j int)
 }
 
-// Tables returns a mapping for the tables that are in the database
-func (db *DB) Tables() (tables map[string][]SchemaObjectDescription) {
-	if db == nil || db.DB == nil {
-		panic("db is nil")
-	}
-	tables = make(map[string][]SchemaObjectDescription)
-	schema := db.Schema
-	if schema == "" {
-		schema = DefaultSchema
-	}
-	selectSQL := fmt.Sprintf(SelectAllTableFromSchema, schema)
-	rows, err := db.Query(selectSQL)
-	if err != nil {
-		log.Printf("error running SQL\n%s", selectSQL)
-		panic("not expecting error")
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var sod SchemaObjectDescription
-		if err := sod.Scan(rows); err != nil {
-			log.Fatal(err)
-		}
-		tables[sod.TableName] = append(tables[sod.TableName], sod)
-	}
-	for name := range tables {
-		sort.Sort(byTableTypeAndSQL(tables[name]))
-	}
-	return tables
-}
+func (b Byer) Less(i, j int) bool { return b.LessFn(i, j) }
+func (b Byer) Len() int           { return b.LenFn() }
+func (b Byer) Swap(i, j int)      { b.SwapFn(i, j) }
 
-func (db *DB) InsertSQL(tableName string, skipFields ...string) []byte {
-
+func InsertSQL(db *sql.DB, tableName string, skipFields ...string) []byte {
 	// lets get all the data from the database
 	rows, err := db.Query(fmt.Sprintf(`SELECT * FROM "%v";`, tableName))
 	if err != nil {
@@ -135,112 +121,6 @@ func (db *DB) InsertSQL(tableName string, skipFields ...string) []byte {
 	return buff.Bytes()
 
 }
-
-// SelectAllTableFromSchema is a simple sql for getting table info
-//
-// REF: https://sqlite.org/schematab.html
-const (
-	SelectAllTableFromSchema = `
-SELECT
-    tbl_name as table_name
-  , type
-  , name as unique_name -- only really applicable to the auto-created indexes
-  , sql -- will be null for auto-created indexes
-FROM
-  %s.sqlite_schema
-;
-`
-	DefaultSchema = "main"
-)
-
-type DBScanner interface {
-	Scan(...interface{}) error
-}
-
-type SchemaType uint8
-
-const (
-	SchemaTypeTable SchemaType = iota
-	SchemaTypeView
-	SchemaTypeTrigger
-	SchemaTypeIndex
-
-	// SchemaTypeUnknown should always be the last entry
-	SchemaTypeUnknown
-)
-
-var schemaTypes = [...]string{"table", "index", "view", "trigger", "unknown"}
-
-func (st SchemaType) String() string {
-	idx := int(st)
-	if idx > int(SchemaTypeUnknown) {
-		idx = int(SchemaTypeUnknown)
-	}
-	return schemaTypes[idx]
-}
-
-func (st *SchemaType) Scan(src interface{}) error {
-	s, ok := src.(string)
-	if !ok {
-		return fmt.Errorf("unsupported type %#v", src)
-	}
-	*st = SchemaTypeUnknown
-	s = strings.ToLower(strings.TrimSpace(s))
-	for i, t := range schemaTypes {
-		if t == s {
-			*st = SchemaType(i)
-			return nil
-		}
-	}
-	return nil
-}
-
-type SchemaColumn struct {
-	ID           int
-	Name         string
-	Type         string
-	NotNull      bool
-	DefaultValue *interface{}
-	PrimaryKey   bool
-}
-
-type SchemaObjectDescription struct {
-	TableName string
-	Type      SchemaType
-	SQL       string
-}
-
-func (sod *SchemaObjectDescription) Scan(s DBScanner) error {
-	var (
-		unique   string
-		tableSQL *string
-	)
-
-	err := s.Scan(&sod.TableName, &sod.Type, &unique, &tableSQL)
-	if err != nil {
-		return err
-	}
-	if tableSQL == nil {
-		tableSQL = new(string)
-	} else {
-		*tableSQL = strings.TrimSpace(*tableSQL)
-	}
-	if *tableSQL != "" && !strings.HasSuffix(*tableSQL, ";") {
-		*tableSQL += ";"
-	}
-	sod.SQL = *tableSQL
-	return nil
-}
-
-var insertTemplate = template.Must(template.New("insertTemplate").Parse(`
-INSERT INTO {{.TableName}}
-  {{.Columns}}
-VALUES
-{{range .Values -}}
-  {{.}}
-{{end -}}
-;
-`))
 
 // insertColumn represents a column in the database
 type insertColumn struct {
@@ -388,23 +268,6 @@ func interfaceValuesToString(values []interface{}) []string {
 	return stringValues
 }
 
-// byTableTypeAndSQL will sort the the SchemaObjectDescription by placing the objects with out SQL's at the end
-// and then by the Type of the Object
-type byTableTypeAndSQL []SchemaObjectDescription
-
-func (by byTableTypeAndSQL) Len() int      { return len(by) }
-func (by byTableTypeAndSQL) Swap(i, j int) { by[i], by[j] = by[j], by[i] }
-func (by byTableTypeAndSQL) Less(i, j int) bool {
-	if by[i].SQL == "" {
-		return false
-	}
-	if by[j].SQL == "" {
-		return true
-	}
-	// compare the type
-	return by[i].Type < by[i].Type
-}
-
 func GetOrderedTablesNamesFromFile(filename string) (tableNames []string, fields [][]string, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
@@ -514,9 +377,3 @@ func parseTableNameEntry(line string) (tableName string, excludeFields []string,
 	}
 	return tableName, excludeFields, comment
 }
-
-/* Compile time checks */
-
-var (
-	_ = schemaTypes[SchemaTypeUnknown]
-)

@@ -45,6 +45,21 @@ type DB struct {
 	*Schema
 }
 
+func (db *DB) Database() *sql.DB {
+	if db == nil {
+		return nil
+	}
+	return db.DB
+}
+
+func (db *DB) SchemaName() string {
+	if db == nil || db.Schema == nil {
+		return ""
+	}
+
+	return db.Schema.Name()
+}
+
 func (db *DB) Close() error {
 	if db == nil {
 		return nil
@@ -96,8 +111,8 @@ func (db *DB) Schemata() ([]schema.Schema, error) {
 }
 
 type Schema struct {
-	db   database
-	name string
+	db          database
+	name        string
 	objSQL      *sql.Stmt
 	objSQLTable *sql.Stmt
 }
@@ -527,3 +542,6 @@ func (index Index) Columns() (cols []schema.Column, err error) {
 	}
 	return cols, nil
 }
+
+// Compile Check
+var _ = schema.Database(new(DB))

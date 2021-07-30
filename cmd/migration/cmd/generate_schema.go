@@ -168,6 +168,10 @@ func (w *tableWriter) OrderedTableNames() []string {
 			if w.tableMap[names[i]].order == w.tableMap[names[j]].order {
 				return names[i] < names[j]
 			}
+			// we want zero to be at the end of the ordering
+			if w.tableMap[names[i]].order == 0 {
+				return false
+			}
 			return w.tableMap[names[i]].order < w.tableMap[names[j]].order
 		},
 	})

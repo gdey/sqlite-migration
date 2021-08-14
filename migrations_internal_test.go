@@ -157,6 +157,11 @@ func TestMigration_Update(t *testing.T) {
 			Start:    "simpletable.sql",
 			End:      "simple_table2.sql",
 		},
+		"upgrade_none": {
+			Versions: []string{"", "simpletable.sql"},
+			Start:    "simpletable.sql",
+			End:      "simpletable.sql",
+		},
 	}
 	for name, tc := range tests {
 		if tc.testDir == "" {

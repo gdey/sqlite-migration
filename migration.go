@@ -221,22 +221,28 @@ func (mng *Manager) addTrackingEntry(db *sql.DB, author, initialVersion string) 
 	var (
 		i       int
 		version string
+		found   bool
 	)
 
 	for i, version = range versions {
 		if version == initialVersion {
+			found = true
 			break
 		}
 	}
 
 	// The version of the database is not in our set of
 	// migrations files. This is weird, lets error.
-	if len(versions) == i+1 {
+	if !found {
 		// do nothing.
 		return initialVersion, ErrUnknownVersion(initialVersion)
 	}
 
 	i++ // move to the next version
+	if i >= len(versions) {
+		// database it already at the latest version
+		return initialVersion, nil
+	}
 
 	// get the max length of the versions
 	var maxLength = utf8.RuneCountInString(versions[i])

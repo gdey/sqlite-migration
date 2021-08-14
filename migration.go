@@ -118,7 +118,7 @@ WHERE tbl_name = '%[1]s';
 	return count != 0
 }
 
-// Init will insure that the initial tables for the file
+// Init will ensure that the initial tables for the file
 // correctly initialized, it returns the current database version
 func (mng *Manager) Init(db *sql.DB, author string) (ver string, didInit bool, err error) {
 
@@ -151,7 +151,10 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 	sqlQuery := fmt.Sprintf(MigrationsTableCreateSQL, mng.TableName())
 	if _, err = db.Exec(sqlQuery); err != nil {
 		mng.Log().Printf("Error running sql:\n%s", sqlQuery)
-		return "", false, fmt.Errorf("failed to create tables : %w", err)
+		return "", false, ErrCreateTable{
+			Err:       err,
+			TableName: mng.TableName(),
+		}
 	}
 	dbVersion, err := mng.addTrackingEntry(db, author, InitialVersion)
 	if err != nil {
@@ -170,7 +173,7 @@ func (mng *Manager) Upgrade(db *sql.DB, author string) (startingVersion string, 
 	if err != nil {
 		return startingVersion, "", err
 	}
-	// we init the db, which means it's a new database, let's return "" for starting version
+	// we initialize the db, which means it's a new database, let's return "" for starting version
 	// Upgrade to the latest version
 	newVersion, err = mng.addTrackingEntry(db, author, startingVersion)
 	if didInit {
@@ -226,10 +229,11 @@ func (mng *Manager) addTrackingEntry(db *sql.DB, author, initialVersion string) 
 		}
 	}
 
-	// Schema already up to date.
+	// The version of the database is not in our set of
+	// migrations files. This is weird, lets error.
 	if len(versions) == i+1 {
 		// do nothing.
-		return initialVersion, nil
+		return initialVersion, ErrUnknownVersion(initialVersion)
 	}
 
 	i++ // move to the next version
@@ -260,7 +264,10 @@ func (mng *Manager) addTrackingEntry(db *sql.DB, author, initialVersion string) 
 		)
 		if err != nil {
 			mng.Log().Printf("Error running sqlQuery:\n%s", sqlQuery)
-			return "", fmt.Errorf("error inserting tracking info: %w", err)
+			return "", ErrTrackingInfo{
+				Err:       err,
+				TableName: mng.tblName,
+			}
 		}
 		mng.Log().Printf("SQL file %-*s took %3.5fs to apply", maxLength, versions[i], duration)
 	}
@@ -335,14 +342,14 @@ func (mng *Manager) applySQLFile(db *sql.DB, filename string) (string, error) {
 
 	body, err := mng.readAllFile(filename)
 	if err != nil {
-		return "", err
+		return "", ErrApplyFileRead{Err: err, Filename: filename}
 	}
 
 	// check to see if the filename is a template
 	if strings.HasSuffix(filename, "tpl") {
 		// we are going to treat the body as a template.
 		if body, err = renderSQLTPL(filename, body, mng.FuncMap()); err != nil {
-			return "", err
+			return "", ErrApplyFileTemplate{Err: err, Filename: filename}
 		}
 	}
 
@@ -354,7 +361,7 @@ func (mng *Manager) applySQLFile(db *sql.DB, filename string) (string, error) {
 	_, err = db.Exec(string(body))
 	if err != nil {
 		mng.Log().Printf("Error running sql:\n%s", body)
-		return "", fmt.Errorf("error running sql: %v : %w", filename, err)
+		return "", ErrApplyFile{Err: err, Sha1Hash: sha1Hash, Filename: filename}
 	}
 
 	return sha1Hash, nil

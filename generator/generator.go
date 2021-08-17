@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"text/template"
 )
 
@@ -41,7 +41,7 @@ func (b Byer) Len() int           { return b.LenFn() }
 func (b Byer) Swap(i, j int)      { b.SwapFn(i, j) }
 
 func InsertSQL(db *sql.DB, tableName string, skipFields ...string) []byte {
-	// lets get all the data from the database
+	// let's get all the data from the database
 	rows, err := db.Query(fmt.Sprintf(`SELECT * FROM "%v";`, tableName))
 	if err != nil {
 		log.Fatal("got error getting data", err)
@@ -70,15 +70,15 @@ func InsertSQL(db *sql.DB, tableName string, skipFields ...string) []byte {
 	var values [][]string
 
 	for rows.Next() {
-		vals := make([]interface{}, len(columns))
+		iValues := make([]interface{}, len(columns))
 		// need to assign a *interface{} value to each entry
-		for i := range vals {
-			vals[i] = new(interface{})
+		for i := range iValues {
+			iValues[i] = new(interface{})
 		}
-		if err := rows.Scan(vals...); err != nil {
+		if err := rows.Scan(iValues...); err != nil {
 			panic(err)
 		}
-		stringValues := interfaceValuesToString(vals)
+		stringValues := interfaceValuesToString(iValues)
 		// run through the strings and adjust the max
 		for i := range columns {
 			l := len(stringValues[columns[i].Index])
@@ -165,7 +165,7 @@ func (c insertColumns) String() string {
 // Len returns total number of columns
 func (c insertColumns) Len() int { return len(c) }
 
-// Less will return if the column order for i is less then column order for j
+// Less will return if the column order for `i` is less than column order for `j`
 func (c insertColumns) Less(i, j int) bool {
 	// sort skipped values to the end
 	if c[i].Skip != c[j].Skip {
@@ -247,7 +247,7 @@ func interfaceValToStr(val interface{}) string {
 		if subKind == reflect.Uint8 || subKind == reflect.Int32 {
 			return fmt.Sprintf(`X'%x'`, value.Bytes())
 		}
-		// otherwise lets just treat it like a string
+		// otherwise, let's just treat it like a string
 		fallthrough
 	default:
 		return interfaceValToStr(fmt.Sprintf("%v", val))
@@ -268,31 +268,68 @@ func interfaceValuesToString(values []interface{}) []string {
 	return stringValues
 }
 
-func GetOrderedTablesNamesFromFile(filename string) (tableNames []string, fields [][]string, err error) {
+func GetOrderedTablesNamesFromFile(filename string) (tableNames []string, fields [][]string, excludeTables []string, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	defer f.Close()
 	return GetOrderedTableNames(f)
 }
 
-// GetOrderedTablesNames parses the io.Reader with table names in them, and returns the table
+// SortUniqueStrings will sort and unique the given array of strings
+func SortUniqueStrings(ps *[]string) {
+
+	if ps == nil || len(*ps) == 0 {
+		return
+	}
+	s := *ps
+	sort.Strings(s)
+
+	// Because we sorted the slice we know that non-unique elements will be next
+	// to each other. So, what we can do is iterate through the array, we check is the
+	// value at the current index the same as the value prior if it is, we advance the current index.
+	// If it isn't we check to see if the copy to index is the same; if it is then we advance both
+	// If it isn't we copy the value to the copy to index and advance both.
+	i, j := 1, 1
+	for ; i < len(s); i++ {
+		if s[i-1] == s[i] {
+			continue // we want to skip `i`'s value as it's already in `i-1`
+			// we can use this to skip to the end of the run as we have sorted the slice already
+		}
+		if i != j {
+			s[j] = s[i] // need to copy over i to j's position
+		}
+		j++
+	}
+	// truncate out the values we don't care about
+	*ps = s[:j]
+}
+
+// GetOrderedTableNames parses the io.Reader with table names in them, and returns the table
 // names in the order they are present in the file. No checks are done to see if the names
 // are unique.
-func GetOrderedTableNames(r io.Reader) (tableNames []string, fields [][]string, err error) {
+// The function will always return at least one tableName '*' which will always be in position zero,
+// regardless of where it appears in the file. This 'table' will contain the global excluded fields.
+func GetOrderedTableNames(r io.Reader) (tableNames []string, fields [][]string, excludeTables []string, err error) {
 	scanner := bufio.NewScanner(r)
-	var globalExcludedFields = make(map[string]struct{})
+	tableNames = []string{"*"}
+	fields = [][]string{{}}
 	for scanner.Scan() {
-		tableName, excludedFields, _ := parseTableNameEntry(scanner.Text())
+		tableName, excludedFields, _, excludeTable := parseTableNameEntry(scanner.Text())
+		if excludeTable {
+			if tableName != "" && tableName != "*" {
+				excludeTables = append(excludeTables, tableName)
+			}
+			continue
+		}
+
 		if len(excludedFields) == 0 && (tableName == "" || tableName == "*") {
 			// nothing to do here
 			continue
 		}
 		if len(excludedFields) > 0 && (tableName == "" || tableName == "*") {
-			for _, fld := range excludedFields {
-				globalExcludedFields[fld] = struct{}{}
-			}
+			fields[0] = append(fields[0], excludedFields...)
 			continue
 		}
 
@@ -301,37 +338,42 @@ func GetOrderedTableNames(r io.Reader) (tableNames []string, fields [][]string, 
 	}
 
 	if err = scanner.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	hasGlobalExcludedFields := len(fields[0]) == 0
 
-	// need to add the global excluded fields to all the tables
-	// and sort and unique the fields
+	if hasGlobalExcludedFields {
+		// only need to sort the table
+		SortUniqueStrings(&fields[0])
+	}
+	base10 := int(math.Floor(math.Log10(float64(len(fields)))))
 	for i := range fields {
-		fmap := make(map[string]struct{})
 
-		for key, v := range globalExcludedFields {
-			fmap[key] = v
-		}
-		for j := range fields[i] {
-			fmap[fields[i][j]] = struct{}{}
-		}
-		// reset the slice
-		fields[i] = fields[i][:0]
-		for key := range fmap {
-			fields[i] = append(fields[i], key)
-		}
-		sort.Strings(fields[i])
+		log.Printf("[%[1]*v] table %v : %+v", base10, i, tableNames[i], fields[i])
+	}
+	log.Printf("excludedTables: %+v", excludeTables)
+	if len(tableNames) == 1 { // only the '*' table is there
+		return tableNames, fields, excludeTables, nil
 	}
 
-	return tableNames, fields, nil
+	for i := 1; i < len(fields); i++ {
+		if hasGlobalExcludedFields {
+			fields[i] = append(fields[i], fields[0]...)
+		}
+		SortUniqueStrings(&fields[i])
+	}
+
+	return tableNames, fields, excludeTables, nil
 }
 
 var parseTableNameEntryRegexp = func() *regexp.Regexp {
-	nameRexp := `(?P<tablename>[*]|[a-zA-Z][a-zA-Z0-9_]*|"[^"]+|")`
+	notRexp := `(?P<not>[!])`
+	nameRexp := `(?P<tablename>[*]|[a-zA-Z][a-zA-Z0-9_]*|"[^"]+")`
 	fieldRexp := `([a-zA-Z][a-zA-Z0-9_]*|"[^"]+")`
-	fieldsRexp := fmt.Sprintf(`(?P<exclude>%[1]s(?:\s*,\s*%[1]s)*)`, fieldRexp)
+	fieldsRexp := fmt.Sprintf(`(?P<exclude>%[1]s(?:\s*[, ]\s*%[1]s)*)`, fieldRexp)
 	commentRexp := `(?:\s*#(?P<comment>.*))?`
-	fullRexp := fmt.Sprintf(`^\s*%[1]s?(?:\s+!\s+%[2]s)?%[3]s$`,
+	fullRexp := fmt.Sprintf(`^\s*%[1]s?\s*%[2]s?(?:\s+!\s+%[3]s)?%[4]s$`,
+		notRexp,
 		nameRexp,
 		fieldsRexp,
 		commentRexp,
@@ -346,20 +388,19 @@ var parseTableNameEntryFieldsRegexp = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9_]*
 // where
 //   a $table_name is ([a-zA-Z][a-zA-Z0-9_]*|"[^"]+")
 //   a $field_name is ([a-zA-Z][a-zA-Z0-9_]*|"[^"]+")
-func parseTableNameEntry(line string) (tableName string, excludeFields []string, comment string) {
-	var lck sync.Mutex
-	lck.Lock()
-	defer lck.Unlock()
+func parseTableNameEntry(line string) (tableName string, excludeFields []string, comment string, not bool) {
 	matches := parseTableNameEntryRegexp.FindStringSubmatch(line)
 	if len(matches) == 0 {
-		log.Printf("line: %#v\n", line)
-		return tableName, excludeFields, comment
+		log.Printf("no matches line: %#v\n", line)
+		return tableName, excludeFields, comment, not
 	}
+	notIndex := parseTableNameEntryRegexp.SubexpIndex("not")
+	not = notIndex != -1 && matches[notIndex] == "!"
 	tblIndex := parseTableNameEntryRegexp.SubexpIndex("tablename")
 	if tblIndex != -1 {
 		if len(matches) <= tblIndex {
 			log.Printf("line: %#v\n", line)
-			log.Printf("werid: matchs %#v\n%d\n", matches, tblIndex)
+			log.Printf("weird: matches %#v\n%d\n", matches, tblIndex)
 		}
 		tableName = strings.Trim(matches[tblIndex], `"`)
 	}
@@ -375,5 +416,5 @@ func parseTableNameEntry(line string) (tableName string, excludeFields []string,
 	if commentIndex != -1 {
 		comment = matches[commentIndex]
 	}
-	return tableName, excludeFields, comment
+	return tableName, excludeFields, comment, not
 }

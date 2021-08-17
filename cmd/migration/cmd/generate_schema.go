@@ -57,13 +57,13 @@ func generatorOutput(cmd *cobra.Command, f string) (filename string, isDir bool,
 
 	switch {
 	case err == nil:
-		// File/Dir exists need to see which one it it.
+		// File/Dir exists need to see which one it is.
 		theLogger.Printf("%v exists ignoring single single-file argument", filename)
 		return f, fileInfo.IsDir(), nil
 	default: // err != nil
 		var pathErr = new(os.PathError)
 		if errors.As(err, &pathErr) {
-			// file does not exists.
+			//the file does not exist on the system.
 			theLogger.Printf("%v does not exists, using single-file argument", filename)
 			return f, !useSingleFile, nil
 		}
@@ -152,6 +152,7 @@ type tableWriter struct {
 	file              *os.File
 	dMap              map[string]map[string]bool
 	tableMap          map[string]TableObjectDescriptor
+	excludeTables     []string
 	order             uint32
 }
 
@@ -179,6 +180,10 @@ func (w *tableWriter) OrderedTableNames() []string {
 }
 
 func (w *tableWriter) WriteTable(log *log.Logger, db *sql.DB, outputPath, name string) (err error) {
+	if name == "*" {
+		// ignore special table
+		return nil
+	}
 	tblDesc, ok := w.tableMap[name]
 	if !ok {
 		return fmt.Errorf("unknown table/view `%v`\nknown tables/views: %v", name, strings.Join(w.KnownTables(), ","))
@@ -186,9 +191,15 @@ func (w *tableWriter) WriteTable(log *log.Logger, db *sql.DB, outputPath, name s
 	if tblDesc.writtenOut {
 		return nil
 	}
+	for _, excludeTable := range w.excludeTables {
+		if name == excludeTable {
+			// We don't write out this table
+			return nil
+		}
+	}
 	for _, dependedOnTable := range tblDesc.dependsOn {
 		if dependedOnTable == name {
-			// we only want depends that are not us.
+			// we only depend on things other than us.
 			continue
 		}
 		if err = w.WriteTable(log, db, outputPath, dependedOnTable); err != nil {
@@ -221,15 +232,31 @@ func (w *tableWriter) WriteReadMe(outputPath string) error {
 }
 
 func (w *tableWriter) excludedFieldsFor(name string) []string {
-	if w.excludedFields == nil {
+	if len(w.excludedFields) == 0 {
+		return make([]string, 0)
+	}
+	if len(w.excludedFields) == 1 {
+		if w.orderedTableNames[0] == "*" {
+			// we only have excluded fields so, we will return that.
+			return w.excludedFields[0]
+		}
 		return make([]string, 0)
 	}
 	for i, tName := range w.orderedTableNames {
+		if tName == "*" {
+			// skip the all table
+			continue
+		}
 		if name == tName {
 			if w.excludedFields[i] != nil {
 				return w.excludedFields[i]
 			}
 		}
+	}
+	// Did not find the table
+	if len(w.excludedFields) == 1 && w.orderedTableNames[0] == "*" {
+		// we only have excluded fields so, we will return that.
+		return w.excludedFields[0]
 	}
 	return make([]string, 0)
 }
@@ -252,6 +279,7 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 		singleFile        *os.File
 		orderedTableNames []string
 		excludedFields    [][]string
+		excludedTables    []string
 	)
 
 	if len(args) == 0 {
@@ -292,7 +320,7 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 		defer singleFile.Close()
 	}
 	if tableNameFile != "" {
-		orderedTableNames, excludedFields, err = generator.GetOrderedTablesNamesFromFile(tableNameFile)
+		orderedTableNames, excludedFields, excludedTables, err = generator.GetOrderedTablesNamesFromFile(tableNameFile)
 		if err != nil {
 			theLogger.Printf("failed to read table names file %v : %v", tableNameFile, err)
 		}
@@ -341,8 +369,9 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 	}
 	sort.Strings(knownViews)
 
-	if len(orderedTableNames) == 0 {
-		orderedTableNames = append(knownTables, knownViews...)
+	// orderedTableNames will always have the first entry be '*'
+	if len(orderedTableNames) == 1 {
+		orderedTableNames = append(append(orderedTableNames, knownTables...), knownViews...)
 	}
 
 	tabWriter := tableWriter{
@@ -353,6 +382,7 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 		tableMap:          tableMap,
 		dataOnly:          dataOnly,
 		excludedFields:    excludedFields,
+		excludeTables:     excludedTables,
 	}
 
 	for _, name := range orderedTableNames {

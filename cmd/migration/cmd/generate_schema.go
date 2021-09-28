@@ -133,11 +133,14 @@ func (obj *TableObjectDescriptor) writeSchemaSQL(log *log.Logger, db *sql.DB, fi
 			}
 		}
 	}
-	insertSQL := generator.InsertSQL(db, name, skipFields...)
-	if len(insertSQL) != 0 {
-		result["data"] = true
-		if _, err = file.Write(insertSQL); err != nil {
-			return result, fmt.Errorf("failed to write insert sql for %v %v: %w", objType, name, err)
+	// We should only write out data for things that are tables.
+	if isTable {
+		insertSQL := generator.InsertSQL(db, name, skipFields...)
+		if len(insertSQL) != 0 {
+			result["data"] = true
+			if _, err = file.Write(insertSQL); err != nil {
+				return result, fmt.Errorf("failed to write insert sql for %v %v: %w", objType, name, err)
+			}
 		}
 	}
 	obj.writtenOut = true
@@ -160,6 +163,9 @@ func (w *tableWriter) OrderedTableNames() []string {
 	// this will go through the table map finding the names in order
 	var names = make([]string, 0, len(w.tableMap))
 	for name := range w.tableMap {
+		if w.IsExcluded(name) {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Sort(generator.Byer{
@@ -179,6 +185,19 @@ func (w *tableWriter) OrderedTableNames() []string {
 	return names
 }
 
+func (w *tableWriter) IsExcluded(name string) bool {
+	if w == nil || len(w.excludeTables) == 0 {
+		return false
+	}
+	for _, excludeTable := range w.excludeTables {
+		if name == excludeTable {
+			// We don't write out this table
+			return true
+		}
+	}
+	return false
+}
+
 func (w *tableWriter) WriteTable(log *log.Logger, db *sql.DB, outputPath, name string) (err error) {
 	if name == "*" {
 		// ignore special table
@@ -191,11 +210,9 @@ func (w *tableWriter) WriteTable(log *log.Logger, db *sql.DB, outputPath, name s
 	if tblDesc.writtenOut {
 		return nil
 	}
-	for _, excludeTable := range w.excludeTables {
-		if name == excludeTable {
-			// We don't write out this table
-			return nil
-		}
+	if w.IsExcluded(name) {
+		// We don't write out this table
+		return nil
 	}
 	for _, dependedOnTable := range tblDesc.dependsOn {
 		if dependedOnTable == name {
@@ -328,6 +345,17 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 
 	tables, _ := db.Tables()
 	views, _ := db.Views()
+	isExcluded := func(name string) bool {
+		if len(excludedTables) == 0 {
+			return false
+		}
+		for _, tbl := range excludedTables {
+			if tbl == name {
+				return true
+			}
+		}
+		return false
+	}
 
 	knownTables := make([]string, 0, len(tables))
 	knownViews := make([]string, 0, len(views))
@@ -355,6 +383,7 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 		tableMap[name] = TableObjectDescriptor{
 			table:     tables[i],
 			dependsOn: dependsOn,
+			excluded:  isExcluded(name),
 		}
 	}
 	sort.Strings(knownTables)
@@ -364,7 +393,8 @@ func runGenerateSchemaCmd(cmd *cobra.Command, args []string) {
 		name := views[i].Name()
 		knownViews = append(knownViews, name)
 		tableMap[name] = TableObjectDescriptor{
-			view: views[i],
+			view:     views[i],
+			excluded: isExcluded(name),
 		}
 	}
 	sort.Strings(knownViews)

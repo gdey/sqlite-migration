@@ -42,8 +42,8 @@ func FilenameFor(dir, tableName string) string {
 	return filepath.Join(dir, name+".sql")
 }
 
-// fileFor will return a file handle with the header written already,
-// it will the responsibility of the
+// FileFor will return a file handle with the header written already,
+// it will the responsibility of the caller to close the file, if there isn't an error
 func FileFor(dir, tableName string) (*os.File, error) {
 
 	filename := FilenameFor(dir, tableName)

@@ -1,7 +1,9 @@
 CREATE TABLE cases (
   case_number text NOT NULL PRIMARY KEY
-, request_id text NOT NULL
+, request_id integer NOT NULL
 , scenario real NOT NULL
+, next_request integer generated always as ( request_id + 1 ) stored
+, past_request integer generated always as ( request_id - 1 ) virtual
 
 , created_at timestamp -- managed via triggers
 , updated_at timestamp -- managed via triggers

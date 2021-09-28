@@ -17,6 +17,15 @@ const (
 	ObjectTypeView    = "view"
 )
 
+type ColumnType int
+
+const (
+	ColumnTypeStandard = ColumnType(iota)
+	ColumnTypeHidden
+	ColumnTypeGeneratedStored
+	ColumnTypeGeneratedVirtual
+)
+
 const (
 	sqliteObjSQL         = `select type, name, tbl_name, sql from main.sqlite_master where type=?;`
 	sqliteObjSQLForTable = `select type, name, tbl_name, sql from main.sqlite_master where type=? AND tbl_name=?`
@@ -296,7 +305,7 @@ func (tbl Table) Columns() (cols []schema.Column, err error) {
 			notNull bool
 			dValue  interface{}
 			pk      int
-			hidden  bool
+			hidden  int
 		)
 		if err = rows.Scan(&cid, &name, &typ, &notNull, &dValue, &pk, &hidden); err != nil {
 			return nil, err
@@ -359,15 +368,22 @@ type Column struct {
 	primary      int
 	null         bool
 	defaultValue interface{}
-	hidden       bool
+	hidden       int
 	schema       *Schema
 }
 
-func (col Column) Index() int   { return col.index }
-func (col Column) Name() string { return col.name }
-func (col Column) Type() string { return col.typ }
+func (col Column) Index() int      { return col.index }
+func (col Column) Name() string    { return col.name }
+func (col Column) RawType() string { return col.typ }
+func (col Column) Type() (typ string) {
+	typ = strings.TrimSpace(strings.ToUpper(col.typ))
+	if strings.HasSuffix(typ, "GENERATED ALWAYS") {
+		typ = typ[:len(typ)-17]
+	}
+	return typ
+}
 func (col Column) GoType() interface{} {
-	switch strings.ToUpper(col.typ) {
+	switch col.Type() {
 	case "TEXT", "BLOB":
 		return ""
 	case "NULL":
@@ -387,7 +403,8 @@ func (col Column) GoType() interface{} {
 func (col Column) IsPrimary() (bool, int)        { return col.primary != 0, col.primary }
 func (col Column) Nullable() bool                { return col.null }
 func (col Column) Default() (interface{}, error) { return col.defaultValue, nil }
-func (col Column) Hidden() bool                  { return col.hidden }
+func (col Column) Hidden() bool                  { return ColumnType(col.hidden) == ColumnTypeHidden }
+func (col Column) ColumnType() ColumnType        { return ColumnType(col.hidden) }
 
 type Trigger struct {
 	schema    *Schema
@@ -446,7 +463,7 @@ func (view View) Columns() (cols []schema.Column, err error) {
 			notNull bool
 			dValue  interface{}
 			pk      int
-			hidden  bool
+			hidden  int
 		)
 		if err = rows.Scan(&cid, &name, &typ, &notNull, &dValue, &pk, &hidden); err != nil {
 			return nil, err
@@ -517,7 +534,7 @@ func (index Index) Columns() (cols []schema.Column, err error) {
 			notNull bool
 			dValue  interface{}
 			pk      int
-			hidden  bool
+			hidden  int
 		)
 		if err = rows.Scan(&cid, &name, &typ, &notNull, &dValue, &pk, &hidden); err != nil {
 			return nil, err

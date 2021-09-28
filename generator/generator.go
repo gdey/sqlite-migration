@@ -244,8 +244,17 @@ func interfaceValToStr(val interface{}) string {
 
 		// only care about uint8 and int32 as these are []byte and []rune
 		subKind := value.Type().Elem().Kind()
-		if subKind == reflect.Uint8 || subKind == reflect.Int32 {
+		switch subKind {
+		case reflect.Uint8:
 			return fmt.Sprintf(`X'%x'`, value.Bytes())
+		case reflect.Int32:
+			var str strings.Builder
+			str.WriteString("X'")
+			for i := 0; i < value.Len(); i++ {
+				str.WriteString(fmt.Sprintf("%x", int32(value.Index(i).Int())))
+			}
+			str.WriteString("'")
+			return str.String()
 		}
 		// otherwise, let's just treat it like a string
 		fallthrough

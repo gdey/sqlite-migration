@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -74,10 +76,40 @@ func (mng *Manager) VersionFile() string {
 }
 
 func (mng *Manager) Versions() ([]string, error) {
-	f, err := mng.FS().Open(mng.VersionFile())
-	if err != nil {
-		return nil, err
+
+	versionFile := mng.VersionFile()
+	if _, err := fs.Stat(mng.FS(), versionFile); errors.Is(err, fs.ErrNotExist) {
+		// There is no version file, so let's see if
+		// there is only one SQLFile, if so that is our version.
+		versionDir := path.Dir(versionFile)
+
+		entries, err := fs.ReadDir(mng.FS(), versionDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read %v: %w", versionDir, err)
+		}
+		var sqlFiles = []string{""} // always start with an empty database
+		for _, e := range entries {
+			if e.Type()&(fs.ModeDir|fs.ModeNamedPipe|fs.ModeSocket|fs.ModeDevice|fs.ModeCharDevice|fs.ModeIrregular) != 0 { // only care about regular files
+				continue
+			}
+			name := e.Name()
+			if strings.HasSuffix(name, ".sql") || strings.HasSuffix(name, ".sql.tpl") {
+				sqlFiles = append(sqlFiles, name)
+			}
+		}
+		sort.Strings(sqlFiles)
+		vFile := path.Base(versionFile)
+		switch len(sqlFiles) {
+		case 1:
+			return nil, fmt.Errorf("directory %v does not contain %v or any sql files", versionDir, vFile)
+		case 2:
+			return sqlFiles, nil
+		default:
+			return nil, fmt.Errorf("directory %v does not contain %v to indicate order to apply sql files", versionDir, vFile)
+		}
 	}
+	// We already know the file exits
+	f, _ := mng.FS().Open(versionFile)
 	defer f.Close()
 
 	return getVersionsFromFile(f), nil
